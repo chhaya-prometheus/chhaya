@@ -1,0 +1,22 @@
+# Production overrides.
+# Loaded on top of base.yaml when CHHAYA_ENV=prod.
+
+environment: prod
+
+# In prod, everything is uploaded to S3 after each pipeline run.
+s3_upload_enabled: true
+
+# Same local dirs — prod still writes to disk first, then uploads.
+# This makes the pipeline resumable if S3 upload fails midway.
+local:
+  raw_dir: data/raw
+  derived_dir: data/derived
+
+logging:
+  level: INFO
+
+# Tighter date range and cloud threshold — we want clean scenes.
+sources:
+  sentinel2:
+    date_range: "2026-05-01/2026-06-30"
+    max_cloud_cover: 20

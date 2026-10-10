@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Chhaya hex cell",
+  "description": "One H3 cell over Delhi. Every row in cells.parquet and every Feature in cells.geojson must match this shape.",
+  "type": "object",
+  "required": [
+    "h3_index",
+    "ndvi",
+    "lst_c",
+    "population",
+    "built_frac",
+    "dust_idx",
+    "school_count",
+    "ward",
+    "priority"
+  ],
+  "properties": {
+    "h3_index": {
+      "type": "string",
+      "description": "H3 cell ID at resolution 8.",
+      "examples": ["883da115adfffff"]
+    },
+    "ndvi": {
+      "type": ["number", "null"],
+      "minimum": -1,
+      "maximum": 1,
+      "description": "Mean NDVI for the cell from Sentinel-2. Null if cloud-covered."
+    },
+    "lst_c": {
+      "type": ["number", "null"],
+      "description": "Mean land surface temperature in Celsius from Landsat thermal. Null if Landsat unavailable."
+    },
+    "population": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "WorldPop population sum for the cell."
+    },
+    "built_frac": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Fraction of cell covered by buildings."
+    },
+    "dust_idx": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Bare-soil-near-road index. Higher = dustier."
+    },
+    "school_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of schools in the cell (OSM amenity=school)."
+    },
+    "ward": {
+      "type": ["string", "null"],
+      "description": "Ward name for aggregation. Null until wards.geojson is added."
+    },
+    "priority": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Weighted priority score. Higher = more urgent for intervention."
+    }
+  },
+  "additionalProperties": true
+}

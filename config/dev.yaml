@@ -1,0 +1,25 @@
+# Local development overrides.
+# Loaded on top of base.yaml when CHHAYA_ENV=dev (or unset).
+
+environment: dev
+
+# In dev, nothing is uploaded to S3 automatically.
+# Fixtures are read from local disk if present, else pulled from S3 once.
+s3_upload_enabled: false
+
+# Use local paths for everything.
+local:
+  raw_dir: data/raw
+  derived_dir: data/derived
+
+logging:
+  level: DEBUG
+
+# Wider date range in dev so we never fail on cloud cover.
+sources:
+  sentinel2:
+    date_range: "2026-01-01/2026-06-30"
+    max_cloud_cover: 40
+    composite:
+      scenes: 4
+      window_days: 45 

@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Chhaya pipeline status",
+  "description": "Written after every slow-pipeline run. Tells the API and frontend which sources succeeded and which failed.",
+  "type": "object",
+  "required": ["run_at", "env", "sources"],
+  "properties": {
+    "run_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp of when the run completed.",
+      "examples": ["2026-10-10T03:30:00Z"]
+    },
+    "env": {
+      "type": "string",
+      "enum": ["dev", "prod"],
+      "description": "Which environment this run was executed in."
+    },
+    "sources": {
+      "type": "object",
+      "description": "One entry per source. Key is the source name.",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["ok", "ran_at"],
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "description": "True if the source produced values this run."
+          },
+          "ran_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this source last ran successfully. Stale if the latest run failed."
+          },
+          "nulls": {
+            "type": ["integer", "null"],
+            "minimum": 0,
+            "description": "How many hexes have null for this source's columns. Null if source failed."
+          },
+          "error": {
+            "type": ["string", "null"],
+            "description": "Exception message if ok=false, else null."
+          }
+        }
+      }
+    }
+  },
+  "additionalProperties": true
+}
