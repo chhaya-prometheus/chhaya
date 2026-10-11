@@ -1,4 +1,6 @@
 environment: dev
+use_stubs: true
+confirm_prod_upload: false
 
 aws:
   region: ap-south-1
