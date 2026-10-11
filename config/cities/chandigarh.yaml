@@ -1,0 +1,13 @@
+name: Chandigarh
+slug: chandigarh
+data_mode: demo
+h3_res: 8
+
+raw:
+  boundary: data/cities/chandigarh_boundary.geojson
+
+grid_fixture: chandigarh_hex_res8.parquet
+
+sentinel2:
+  bbox: [76.70, 30.65, 76.85, 30.80]
+  epsg: 32643
