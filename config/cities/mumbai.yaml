@@ -1,0 +1,13 @@
+name: Mumbai
+slug: mumbai
+data_mode: demo
+h3_res: 8
+
+raw:
+  boundary: data/raw/mumbai/mumbai_boundary.geojson
+
+grid_fixture: mumbai_hex_res8.parquet
+
+sentinel2:
+  bbox: [72.77, 18.89, 73.03, 19.27]
+  epsg: 32643
