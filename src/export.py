@@ -4,11 +4,14 @@ S3 read/write for pipeline artifacts.
 Only this module touches S3. Everything else writes to local disk.
 Handles the two-tier merge: new source columns overwrite old values,
 failed sources keep their previous values.
+
+One S3Exporter instance per city. The instance reads cfg["_slug"] and
+builds all S3 keys from it: features/<slug>_cells.parquet, etc.
 """
 
-from pathlib import Path
 import io
 import json
+from pathlib import Path
 
 import boto3
 import geopandas as gpd
@@ -20,25 +23,59 @@ class S3Exporter:
     def __init__(self, cfg: dict, log):
         self.cfg = cfg
         self.log = log
+        self.slug = cfg["_slug"]
         self.bucket = cfg["aws"]["bucket"]
         self.region = cfg["aws"]["region"]
+        self.prefix = cfg["artifacts"]["s3_prefix"].rstrip("/")
         self.client = boto3.client("s3", region_name=self.region)
+
+    # ---------- key builders ----------
+
+    def _key_cells_parquet(self) -> str:
+        return f"{self.prefix}/{self.slug}_cells.parquet"
+
+    def _key_cells_geojson(self) -> str:
+        return f"{self.prefix}/{self.slug}_cells.geojson"
+
+    def _key_status(self) -> str:
+        return f"{self.prefix}/{self.slug}_status.json"
+
+    def _key_wards_geojson(self) -> str:
+        return f"{self.prefix}/{self.slug}_wards.geojson"
+
+    def _key_ward_stats(self) -> str:
+        return f"{self.prefix}/{self.slug}_ward_stats.json"
+
+    def _key_cities_index(self) -> str:
+        return f"{self.prefix}/cities.json"
 
     # ---------- read ----------
 
     def load_existing_cells(self) -> gpd.GeoDataFrame | None:
-        """Fetch previous cells.parquet from S3, or None if first run."""
-        key = self.cfg["artifacts"]["files"]["cells_parquet"]
+        """Fetch previous <slug>_cells.parquet from S3, or None if first run."""
+        key = self._key_cells_parquet()
         try:
-            self.log.info(f"reading s3://{self.bucket}/{key}")
+            self.log.info(f"[{self.slug}] reading s3://{self.bucket}/{key}")
             obj = self.client.get_object(Bucket=self.bucket, Key=key)
             gdf = gpd.read_parquet(io.BytesIO(obj["Body"].read()))
-            self.log.info(f"loaded existing cells.parquet — {len(gdf)} rows")
+            self.log.info(f"[{self.slug}] loaded existing cells — {len(gdf)} rows")
             return gdf
         except ClientError as e:
             if e.response["Error"]["Code"] in ("NoSuchKey", "404"):
-                self.log.info("no existing cells.parquet — first run")
+                self.log.info(f"[{self.slug}] no existing cells — first run")
                 return None
+            raise
+
+    def load_cities_index(self) -> list[dict]:
+        """Read existing features/cities.json, or [] if missing."""
+        key = self._key_cities_index()
+        try:
+            obj = self.client.get_object(Bucket=self.bucket, Key=key)
+            data = json.loads(obj["Body"].read().decode("utf-8"))
+            return data if isinstance(data, list) else []
+        except ClientError as e:
+            if e.response["Error"]["Code"] in ("NoSuchKey", "404"):
+                return []
             raise
 
     # ---------- two-tier merge ----------
@@ -56,10 +93,8 @@ class S3Exporter:
         if old is None:
             return new
 
-        # Start from new (which has fresh values for ok sources)
         merged = new.copy()
 
-        # For columns NOT in ok_columns, restore old values where new has nulls
         for col in old.columns:
             if col in ("h3_index", "geometry"):
                 continue
@@ -68,7 +103,6 @@ class S3Exporter:
             if col not in merged.columns:
                 merged[col] = None
 
-            # Take old value where new is null
             old_indexed = old.set_index("h3_index")[col]
             merged_indexed = merged.set_index("h3_index")
             merged_indexed[col] = merged_indexed[col].fillna(old_indexed)
@@ -79,22 +113,3 @@ class S3Exporter:
 
     # ---------- write ----------
 
-    def upload_local(self, local_path: Path, s3_key: str):
-        size_kb = local_path.stat().st_size / 1024
-        self.log.info(f"uploading {local_path.name} ({size_kb:.1f} KB) → s3://{self.bucket}/{s3_key}")
-        try:
-            self.client.upload_file(str(local_path), self.bucket, s3_key)
-            self.log.info(f"  ✓ {s3_key}")
-        except ClientError as e:
-            self.log.error(f"  ✗ {e}")
-            raise
-
-    def write_status(self, status: dict):
-        key = self.cfg["artifacts"]["files"]["pipeline_status"]
-        self.log.info(f"writing status → s3://{self.bucket}/{key}")
-        self.client.put_object(
-            Bucket=self.bucket,
-            Key=key,
-            Body=json.dumps(status, indent=2).encode("utf-8"),
-            ContentType="application/json",
-        )
