@@ -89,6 +89,11 @@ def main() -> int:
     derived_dir = Path(cfg["local"]["derived_dir"])
     derived_dir.mkdir(parents=True, exist_ok=True)
 
+    log.info("=" * 60)
+    log.info(f"  CHHAYA pipeline — env = {cfg['_env'].upper()}")
+    log.info(f"  bucket = {cfg['aws']['bucket']}")
+    log.info("=" * 60)
+
     # 1. load grid fixture
     grid_path = Path(cfg["fixtures"]["local_dir"]) / "delhi_hex_res8.parquet"
     log.info(f"loading grid fixture: {grid_path}")

@@ -1,0 +1,13 @@
+name: Lucknow
+slug: lucknow
+data_mode: demo
+h3_res: 8
+
+raw:
+  boundary: data/cities/lucknow_boundary.geojson
+
+grid_fixture: lucknow_hex_res8.parquet
+
+sentinel2:
+  bbox: [80.80, 26.70, 81.10, 26.98]
+  epsg: 32644

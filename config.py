@@ -5,8 +5,12 @@ from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parents[0]
 
+load_dotenv(PROJECT_ROOT / ".env")
+
 CONFIG_DIR = PROJECT_ROOT / "config"
-ENV = os.getenv("CHHAYA_ENV", "prod")
+CITIES_DIR = CONFIG_DIR / "cities"
+
+ENV = os.getenv("CHHAYA_ENV")
 
 
 def _read_yaml(path: Path) -> dict:
@@ -56,3 +60,55 @@ def load_config() -> dict:
         load_config._cache = merged
 
     return load_config._cache
+
+def list_cities() -> list[str]:
+    """Return slugs of all cities with a config file."""
+    if not CITIES_DIR.exists():
+        return []
+    return sorted(
+        p.stem for p in CITIES_DIR.glob("*.yaml")
+    )
+
+
+def _resolve_city_paths(city: dict, base: dict) -> dict:
+    """Resolve raw.* paths against PROJECT_ROOT and grid_fixture against cities_dir."""
+    cities_dir = PROJECT_ROOT / base["local"]["cities_dir"]
+
+    raw = city.get("raw", {})
+    for key in ("boundary", "wards_file"):
+        if key in raw and not Path(raw[key]).is_absolute():
+            raw[key] = str(PROJECT_ROOT / raw[key])
+    city["raw"] = raw
+
+    fixture_name = city.get("grid_fixture")
+    if fixture_name:
+        city["grid_fixture_path"] = str(cities_dir / fixture_name)
+
+    city["_cities_dir"] = str(cities_dir)
+    return city
+
+
+def load_city(slug: str) -> dict:
+    """Load one city's config, merged with base.yaml."""
+    path = CITIES_DIR / f"{slug}.yaml"
+    if not path.exists():
+        raise FileNotFoundError(
+            f"No city config for '{slug}'. Expected {path}"
+        )
+
+    base = load_config()
+    city = _read_yaml(path)
+
+    # Merge: base under city, city wins on conflicts
+    merged = _deep_merge(base, city)
+
+    # Merge sentinel2: base's url/collection/etc + city's bbox/epsg
+    city_s2 = city.get("sentinel2", {})
+    if city_s2:
+        merged["sources"]["sentinel2"] = _deep_merge(
+            merged["sources"]["sentinel2"], city_s2
+        )
+
+    merged = _resolve_city_paths(merged, base)
+    merged["_slug"] = slug
+    return merged

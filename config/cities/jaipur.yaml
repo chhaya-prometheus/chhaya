@@ -1,0 +1,13 @@
+name: Jaipur
+slug: jaipur
+data_mode: demo
+h3_res: 8
+
+raw:
+  boundary: data/cities/jaipur_boundary.geojson
+
+grid_fixture: jaipur_hex_res8.parquet
+
+sentinel2:
+  bbox: [75.70, 26.75, 75.95, 27.05]
+  epsg: 32643

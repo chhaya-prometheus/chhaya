@@ -1,0 +1,13 @@
+name: Hyderabad
+slug: hyderabad
+data_mode: demo
+h3_res: 8
+
+raw:
+  boundary: data/cities/hyderabad_boundary.geojson
+
+grid_fixture: hyderabad_hex_res8.parquet
+
+sentinel2:
+  bbox: [78.24, 17.25, 78.63, 17.56]
+  epsg: 32644
