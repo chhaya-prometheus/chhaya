@@ -195,3 +195,138 @@ def validate_schema(cells: gpd.GeoDataFrame, schema_path: Path) -> tuple[bool, s
 
     return True, f"{len(records)} rows valid"
 
+# --------------------------------------------------------------------------
+# Wards
+# --------------------------------------------------------------------------
+
+def load_wards_fixture(cfg: dict) -> pd.DataFrame | None:
+    """Load <slug>_wards.parquet if it exists, else None."""
+    path = Path(cfg["local"]["derived_dir"]) / f"{cfg['_slug']}_wards.parquet"
+    if not path.exists():
+        return None
+    log.info(f"[{cfg['_slug']}] loading wards fixture: {path.name}")
+    return pd.read_parquet(path)
+
+
+# --------------------------------------------------------------------------
+# Per-city pipeline
+# --------------------------------------------------------------------------
+
+def run_city(slug: str) -> tuple[bool, dict | None]:
+    """
+    Run the full pipeline for one city.
+
+    Returns (ok, city_index_entry). entry is None if city failed.
+    """
+    cfg = load_city(slug)
+    log.info("=" * 60)
+    log.info(f"  CITY: {cfg['name']} ({slug})  mode={cfg['data_mode']}")
+    log.info(f"  env={cfg['_env']}  bucket={cfg['aws']['bucket']}")
+    log.info("=" * 60)
+
+    derived_dir = Path(cfg["local"]["derived_dir"])
+    derived_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Load grid fixture
+    grid_path = Path(cfg["grid_fixture_path"])
+    if not grid_path.exists():
+        log.error(f"[{slug}] grid fixture missing: {grid_path}")
+        return False, None
+    grid = gpd.read_parquet(grid_path)
+    log.info(f"[{slug}] grid: {len(grid)} hexes")
+
+    # 2. Load existing cells from S3 (None on first run)
+    exporter = S3Exporter(cfg, log)
+    old_cells = exporter.load_existing_cells() if cfg.get("s3_upload_enabled") else None
+
+    # 3. Load wards fixture if exists
+    wards = load_wards_fixture(cfg)
+
+    # 4. Run sources
+    cells = grid[["h3_index", "geometry"]].copy()
+    statuses: dict[str, dict] = {}
+    ok_columns: set[str] = set()
+
+    for SourceClass in pick_sources(cfg):
+        col_df, status = run_source(SourceClass, cfg, grid)
+        statuses[_source_key(SourceClass)] = status
+        if status["ok"]:
+            ok_columns.update(c for c in col_df.columns if c != "h3_index")
+        cells = cells.merge(col_df, on="h3_index", how="left")
+
+    # 5. Merge wards in (not a source, but a fixture)
+    if wards is not None:
+        cells = cells.merge(wards[["h3_index", "ward", "ward_id"]], on="h3_index", how="left")
+        ok_columns.update(["ward", "ward_id"])
+        log.info(f"[{slug}] wards merged")
+    else:
+        cells["ward"] = None
+        cells["ward_id"] = None
+
+    # 6. Two-tier merge with previous run
+    cells = exporter.merge_preserving_old(cells, old_cells, ok_columns)
+
+    # 7. Fill defaults, compute priority
+    cells = fill_defaults(cells)
+    cells = compute_priority(cells)
+
+    log.info(f"[{slug}] final — {len(cells)} rows, cols={list(cells.columns)}")
+
+    # 8. Validate against schema
+    schema_path = Path(cfg["_project_root"]) / "contract" / "cell.schema.json"
+    ok, msg = validate_schema(cells, schema_path)
+    if not ok:
+        log.error(f"[{slug}] SCHEMA VALIDATION FAILED: {msg}")
+        log.error(f"[{slug}] aborting — not uploading")
+        return False, None
+    log.info(f"[{slug}] schema valid: {msg}")
+
+    # 9. Write locally
+    out_parquet = derived_dir / f"{slug}_cells.parquet"
+    out_geojson = derived_dir / f"{slug}_cells.geojson"
+    cells.to_parquet(out_parquet)
+    cells.to_file(out_geojson, driver="GeoJSON")
+    log.info(f"[{slug}] wrote {out_parquet.name}, {out_geojson.name}")
+
+    # 10. Upload
+    if cfg.get("s3_upload_enabled", False):
+        if cfg["_env"] == "prod" and not cfg.get("confirm_prod_upload", False):
+            log.error(f"[{slug}] prod upload not confirmed — set confirm_prod_upload")
+            return False, None
+
+        exporter.upload_local(out_parquet, exporter._key_cells_parquet())
+        exporter.upload_local(out_geojson, exporter._key_cells_geojson())
+
+        status_doc = {
+            "run_at": _now_iso(),
+            "env": cfg["_env"],
+            "city": slug,
+            "data_mode": cfg["data_mode"],
+            "sources": statuses,
+        }
+        exporter.write_status(status_doc)
+        log.info(f"[{slug}] uploaded cells + status to S3")
+    else:
+        log.info(f"[{slug}] s3_upload_enabled=false — local only")
+
+    # 11. Summary
+    log.info(f"[{slug}] === summary ===")
+    for name, s in statuses.items():
+        mark = "✓" if s["ok"] else "✗"
+        log.info(f"  {mark} {name}  nulls={s['nulls']}  {s['error'] or ''}")
+
+    # Build cities index entry
+    b = grid.total_bounds
+    entry = {
+        "slug": slug,
+        "name": cfg["name"],
+        "bbox": [float(b[0]), float(b[1]), float(b[2]), float(b[3])],
+        "center": [float((b[0] + b[2]) / 2), float((b[1] + b[3]) / 2)],
+        "zoom": 11,
+        "data_mode": cfg["data_mode"],
+        "has_wards": wards is not None,
+    }
+
+    failed = [n for n, s in statuses.items() if not s["ok"]]
+    return (len(failed) == 0), entry
+
