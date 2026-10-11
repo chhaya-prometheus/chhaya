@@ -4,9 +4,9 @@ import yaml
 from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parents[0]
-
+load_dotenv(PROJECT_ROOT / ".env")
 CONFIG_DIR = PROJECT_ROOT / "config"
-ENV = os.getenv("CHHAYA_ENV", "prod")
+ENV = os.getenv("CHHAYA_ENV")
 
 
 def _read_yaml(path: Path) -> dict:
