@@ -2,6 +2,7 @@
 # Loaded on top of base.yaml when CHHAYA_ENV=prod.
 
 environment: prod
+confirm_prod_upload: true
 
 # In prod, everything is uploaded to S3 after each pipeline run.
 s3_upload_enabled: true

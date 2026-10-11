@@ -12,6 +12,7 @@ import hashlib
 from datetime import datetime, timedelta
 
 import geopandas as gpd
+import pandas as pd
 import numpy as np
 import stackstac
 import xarray as xr
@@ -171,12 +172,10 @@ class Sentinel2Source(SourceBase):
             stats=["mean"],
         )
 
-        result = gpd.GeoDataFrame(
-            {
-                "h3_index": grid["h3_index"].values,
-                "ndvi": [s["mean"] for s in stats],
-            }
-        )
+        result =  pd.DataFrame({
+            "h3_index": grid["h3_index"].values,
+            "ndvi": [s["mean"] for s in stats],
+        })
 
         non_null = result["ndvi"].notna().sum()
         self.log.info(f"zonal complete — {non_null}/{len(result)} hexes have NDVI")

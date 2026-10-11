@@ -10,7 +10,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 CONFIG_DIR = PROJECT_ROOT / "config"
 CITIES_DIR = CONFIG_DIR / "cities"
 
-ENV = os.getenv("CHHAYA_ENV")
+ENV = os.getenv("CHHAYA_ENV", "dev")
 
 
 def _read_yaml(path: Path) -> dict:
