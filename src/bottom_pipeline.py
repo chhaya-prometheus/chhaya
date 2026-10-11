@@ -137,3 +137,61 @@ def _min_max_norm(s: pd.Series) -> pd.Series:
         return pd.Series(0.0, index=s.index)
     return (s - lo) / (hi - lo)
 
+def compute_priority(cells: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """
+    Weighted sum of:
+      - heat: lst_c (higher = worse)
+      - population: population (higher = worse)
+      - greenery_deficit: 1 - ndvi (lower ndvi = worse)
+      - dust: dust_idx (higher = worse)
+
+    Nulls treated as column median so one missing source doesn't zero
+    the score. Result is 0..1. priority_rank 1 = highest priority.
+    """
+    df = cells.copy()
+
+    heat = df["lst_c"].fillna(df["lst_c"].median())
+    pop = df["population"].fillna(0)
+    ndvi = df["ndvi"].fillna(df["ndvi"].median())
+    dust = df["dust_idx"].fillna(df["dust_idx"].median())
+
+    heat_n = _min_max_norm(heat)
+    pop_n = _min_max_norm(pop)
+    green_n = 1.0 - _min_max_norm(ndvi)
+    dust_n = _min_max_norm(dust)
+
+    df["priority"] = (
+        PRIORITY_WEIGHTS["heat"] * heat_n
+        + PRIORITY_WEIGHTS["population"] * pop_n
+        + PRIORITY_WEIGHTS["greenery_deficit"] * green_n
+        + PRIORITY_WEIGHTS["dust"] * dust_n
+    ).clip(0, 1)
+
+    df["priority_rank"] = (
+        df["priority"]
+        .rank(ascending=False, method="first")
+        .astype(int)
+    )
+    return df
+
+
+def validate_schema(cells: gpd.GeoDataFrame, schema_path: Path) -> tuple[bool, str]:
+    """Validate cells against cell.schema.json using jsonschema."""
+    try:
+        import jsonschema
+    except ImportError:
+        return True, "jsonschema not installed — skipping validation"
+
+    schema = json.loads(schema_path.read_text())
+
+    # Convert to plain records for validation
+    records = cells.drop(columns=["geometry"], errors="ignore").to_dict("records")
+
+    for i, row in enumerate(records):
+        try:
+            jsonschema.validate(instance=row, schema=schema)
+        except jsonschema.ValidationError as e:
+            return False, f"row {i} (h3={row.get('h3_index')}): {e.message}"
+
+    return True, f"{len(records)} rows valid"
+
