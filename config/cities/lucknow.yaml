@@ -4,7 +4,7 @@ data_mode: demo
 h3_res: 8
 
 raw:
-  boundary: data/raw/lucknow/lucknow_boundary.geojson
+  boundary: data/cities/lucknow_boundary.geojson
 
 grid_fixture: lucknow_hex_res8.parquet
 

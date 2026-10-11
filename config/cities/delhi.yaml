@@ -4,8 +4,8 @@ data_mode: real
 h3_res: 8
 
 raw:
-  boundary: data/raw/delhi/delhi_boundary.geojson
-  wards_file: data/raw/delhi/delhi_wards.geojson
+  boundary: data/cities/delhi_boundary.geojson
+  wards_file: data/cities/delhi_wards.geojson
   ward_name_col: Ward_Name
   ward_id_col: Ward_No
 
