@@ -5,8 +5,9 @@ aws:
   bucket: chhaya-delhi
 
 local:
-  raw_dir: data/raw
-  derived_dir: data/derived
+  raw_dir: data/raw              # source downloads (sentinel-2, worldpop, ...)
+  cities_dir: data/cities        # per-city boundaries, wards, hex fixtures
+  derived_dir: data/derived      # pipeline outputs
 
 fixtures:
   s3_prefix: fixtures/
