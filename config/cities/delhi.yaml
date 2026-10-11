@@ -1,0 +1,16 @@
+name: Delhi
+slug: delhi
+data_mode: real
+h3_res: 8
+
+raw:
+  boundary: data/raw/delhi/delhi_boundary.geojson
+  wards_file: data/raw/delhi/delhi_wards.geojson
+  ward_name_col: Ward_Name
+  ward_id_col: Ward_No
+
+grid_fixture: delhi_hex_res8.parquet
+
+sentinel2:
+  bbox: [76.83, 28.40, 77.35, 28.88]     # [west, south, east, north]
+  epsg: 32643                             # UTM Zone 43N
