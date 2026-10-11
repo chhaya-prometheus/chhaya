@@ -113,3 +113,61 @@ class S3Exporter:
 
     # ---------- write ----------
 
+    def upload_local(self, local_path: Path, s3_key: str) -> None:
+        size_kb = local_path.stat().st_size / 1024
+        self.log.info(
+            f"[{self.slug}] uploading {local_path.name} ({size_kb:.1f} KB) "
+            f"→ s3://{self.bucket}/{s3_key}"
+        )
+        try:
+            self.client.upload_file(str(local_path), self.bucket, s3_key)
+            self.log.info(f"[{self.slug}]   ✓ {s3_key}")
+        except ClientError as e:
+            self.log.error(f"[{self.slug}]   ✗ {e}")
+            raise
+
+    def upload_bytes(self, data: bytes, s3_key: str, content_type: str) -> None:
+        self.log.info(f"[{self.slug}] uploading {s3_key} ({len(data)/1024:.1f} KB)")
+        try:
+            self.client.put_object(
+                Bucket=self.bucket, Key=s3_key,
+                Body=data, ContentType=content_type,
+            )
+            self.log.info(f"[{self.slug}]   ✓ {s3_key}")
+        except ClientError as e:
+            self.log.error(f"[{self.slug}]   ✗ {e}")
+            raise
+
+    def write_status(self, status: dict) -> None:
+        key = self._key_status()
+        self.upload_bytes(
+            json.dumps(status, indent=2).encode("utf-8"),
+            key,
+            "application/json",
+        )
+
+    def write_wards_geojson(self, local_path: Path) -> None:
+        self.upload_local(local_path, self._key_wards_geojson())
+
+    def write_ward_stats(self, stats: list[dict]) -> None:
+        self.upload_bytes(
+            json.dumps(stats, indent=2).encode("utf-8"),
+            self._key_ward_stats(),
+            "application/json",
+        )
+
+    # ---------- cities index (shared, not slug-scoped) ----------
+
+    def write_cities_index(self, cities: list[dict]) -> None:
+        key = self._key_cities_index()
+        self.log.info(f"writing cities index → s3://{self.bucket}/{key}")
+        try:
+            self.client.put_object(
+                Bucket=self.bucket, Key=key,
+                Body=json.dumps(cities, indent=2).encode("utf-8"),
+                ContentType="application/json",
+            )
+            self.log.info(f"  ✓ {key} ({len(cities)} cities)")
+        except ClientError as e:
+            self.log.error(f"  ✗ {e}")
+            raise
