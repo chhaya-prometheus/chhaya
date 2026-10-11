@@ -62,14 +62,11 @@ PRIORITY_WEIGHTS = {
 # --------------------------------------------------------------------------
 
 def pick_sources(cfg: dict) -> list:
-    """
-    Return the list of source classes to run for this city.
+    if cfg["data_mode"] == "demo":
+        from src.sources.mock import MockSource
+        return [MockSource]
 
-    - All cities get Sentinel2Source (real NDVI download).
-    - If use_stubs is true, add the four stub sources.
-    - Wards are NOT a source here; they are loaded from the
-      one-time <slug>_wards.parquet fixture.
-    """
+    # real mode
     sources = [Sentinel2Source]
     if cfg.get("use_stubs", False):
         sources += [WorldPopStub, OSMStub, LandsatStub, DustStub]
@@ -330,3 +327,63 @@ def run_city(slug: str) -> tuple[bool, dict | None]:
     failed = [n for n, s in statuses.items() if not s["ok"]]
     return (len(failed) == 0), entry
 
+# --------------------------------------------------------------------------
+# Main
+# --------------------------------------------------------------------------
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--city", action="append", default=None,
+                        help="City slug (repeatable). Defaults to delhi.")
+    parser.add_argument("--all", action="store_true",
+                        help="Run every city in config/cities/")
+    args = parser.parse_args()
+
+    if args.all:
+        slugs = list_cities()
+    elif args.city:
+        slugs = args.city
+    else:
+        slugs = ["delhi"]
+
+    log.info(f"running for cities: {slugs}")
+
+    results: dict[str, bool] = {}
+    entries: list[dict] = []
+
+    for slug in slugs:
+        try:
+            ok, entry = run_city(slug)
+        except Exception as e:
+            log.error(f"[{slug}] pipeline crashed: {type(e).__name__}: {e}")
+            ok, entry = False, None
+        results[slug] = ok
+        if entry:
+            entries.append(entry)
+
+    # Update cities.json — merge with existing entries for cities not in this run
+    if entries:
+        try:
+            any_cfg = load_city(slugs[0])
+            if any_cfg.get("s3_upload_enabled", False):
+                exporter = S3Exporter(any_cfg, log)
+                existing = exporter.load_cities_index()
+                keep = {e["slug"]: e for e in existing if e.get("slug")}
+                for e in entries:
+                    keep[e["slug"]] = e
+                merged = list(keep.values())
+                exporter.write_cities_index(merged)
+        except Exception as e:
+            log.error(f"cities.json update failed: {type(e).__name__}: {e}")
+
+    log.info("=== final ===")
+    for slug, ok in results.items():
+        log.info(f"  {'✓' if ok else '✗'} {slug}")
+
+    return 0 if all(results.values()) else 1
+
+
+if __name__ == "__main__":
+    exit_code = main()
+    logging.shutdown()
+    sys.exit(exit_code)
