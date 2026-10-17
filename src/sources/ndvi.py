@@ -84,9 +84,9 @@ class Sentinel2Source(SourceBase):
             if len(chosen) >= comp["scenes"]:
                 break
 
-            tile = item.properties.get("grid:code", "unknown")
-            if tile in used_tiles:
-                continue
+            tile = item.properties.get("grid:code")
+            if tile is None or tile in used_tiles:
+                continue   
 
             if anchor_date is None:
                 anchor_date = item.datetime
@@ -110,7 +110,6 @@ class Sentinel2Source(SourceBase):
 
         return chosen
 
-
     def _cache_path(self, scenes: list) -> Path:
         cache_dir = Path(self.cfg["local"]["raw_dir"]) / "sentinel2"
         cache_dir.mkdir(parents=True, exist_ok=True)
@@ -118,25 +117,36 @@ class Sentinel2Source(SourceBase):
         key = hashlib.md5("|".join(sorted(s.id for s in scenes)).encode()).hexdigest()[:10]
         return cache_dir / f"composite_{key}_ndvi.tif"
 
-
     def _load_bands(self, scenes: list):
         cfg = self._cfg()
         self.log.info(f"loading {len(scenes)} scenes, bands {cfg['bands']} at {cfg['resolution_m']}m")
 
+        bands = cfg["bands"]
+        missing = {"red", "nir"} - set(bands)
+        if missing:
+            raise ValueError(
+                f"cfg['bands'] must include {sorted(missing)}; got {bands}"
+            )
+
         stack = stackstac.stack(
             scenes,
-            assets=cfg["bands"],
+            assets=bands,
             epsg=cfg["epsg"],
             resolution=cfg["resolution_m"],
             bounds_latlon=cfg["bbox"],
-        )  # dims: (time, band, y, x)
+        ) # dims: (time, band, y, x)
 
-        red = stack.sel(band="red").compute().astype("float32")  # (time, y, x)
-        nir = stack.sel(band="nir").compute().astype("float32")
+        self.log.info(
+            f"resolved grid: epsg={cfg['epsg']} res={cfg['resolution_m']}m "
+            f"shape={dict(zip(stack.sizes, stack.shape))}"
+            )
+        
+        both = stack.sel(band=["red", "nir"]).compute().astype("float32")
+        red = both.sel(band="red")   # (time, y, x)
+        nir = both.sel(band="nir")
 
         self.log.info(f"loaded red shape={red.shape}, nir shape={nir.shape}")
         return red, nir
-
 
     def _compute_ndvi(self, red, nir):
         # red, nir shape: (time, y, x). Compute NDVI per scene, then median across time.
