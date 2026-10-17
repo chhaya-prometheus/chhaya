@@ -145,7 +145,16 @@ class Sentinel2Source(SourceBase):
         red = both.sel(band="red")   # (time, y, x)
         nir = both.sel(band="nir")
 
-        self.log.info(f"loaded red shape={red.shape}, nir shape={nir.shape}")
+        # After compute()
+        if red.sizes["y"] == 0 or red.sizes["x"] == 0:
+            raise RuntimeError(
+                f"stackstac produced empty grid: {dict(red.sizes)}. "
+                f"Check epsg/resolution/bbox consistency."
+            )
+        
+        self.log.info(
+            f"grid dims: time={red.sizes['time']}, y={red.sizes['y']}, x={red.sizes['x']}",
+            f"loaded red shape={red.shape}, nir shape={nir.shape}")
         return red, nir
 
     def _compute_ndvi(self, red, nir):
