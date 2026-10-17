@@ -153,17 +153,29 @@ class Sentinel2Source(SourceBase):
             )
         
         self.log.info(
-            f"grid dims: time={red.sizes['time']}, y={red.sizes['y']}, x={red.sizes['x']}",
-            f"loaded red shape={red.shape}, nir shape={nir.shape}")
+            f"grid dims: time={red.sizes['time']}, y={red.sizes['y']}, x={red.sizes['x']}"
+        )
+        self.log.info(f"loaded red shape={red.shape}, nir shape={nir.shape}")
         return red, nir
 
     def _compute_ndvi(self, red, nir):
-        # red, nir shape: (time, y, x). Compute NDVI per scene, then median across time.
         ndvi = (nir - red) / (nir + red)
-        valid = (red > 0) & (nir > 0)
+
+        # Reject pixels with:
+        #   - non-finite input
+        #   - near-zero denominator (division blowup)
+        #   - implausible NDVI (safety net)
+        eps = 1e-6
+        denom = nir + red
+        valid = (
+            np.isfinite(red)
+            & np.isfinite(nir)
+            & (np.abs(denom) > eps)
+            & (ndvi >= -1)
+            & (ndvi <= 1)
+        )
         ndvi = ndvi.where(valid)
 
-        # Median across time — robust to a cloudy pixel in one scene
         ndvi_med = ndvi.median(dim="time", skipna=True)
 
         self.log.info(
