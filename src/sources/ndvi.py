@@ -35,10 +35,10 @@ class Sentinel2Source(SourceBase):
 
         if cache.exists():
             self.log.info(f"using cached NDVI raster: {cache.name}")
-            ndvi = xr.open_dataarray(cache).load()
+            ndvi = xr.open_dataarray(cache, engine="rasterio").load()
         else:
-            red, nir = self._load_bands(scene)
-            ndvi = self._compute_ndvi(red, nir)
+            red, nir, scl = self._load_bands(scenes)
+            ndvi = self._compute_ndvi(red, nir, scl)
             self._save_cache(ndvi, cache)
 
         return self._zonal(ndvi, grid, cache)
@@ -118,45 +118,57 @@ class Sentinel2Source(SourceBase):
         return cache_dir / f"composite_{key}_ndvi.tif"
 
     def _load_bands(self, scenes: list):
+        """Load red, nir, scl as lazy arrays. Apply scale+offset. Mask clouds."""
         cfg = self._cfg()
-        self.log.info(f"loading {len(scenes)} scenes, bands {cfg['bands']} at {cfg['resolution_m']}m")
+        scl_band = cfg["scl_band"]
+        bad_classes = cfg["scl_bad_classes"]
 
-        bands = cfg["bands"]
-        missing = {"red", "nir"} - set(bands)
-        if missing:
-            raise ValueError(
-                f"cfg['bands'] must include {sorted(missing)}; got {bands}"
-            )
+        self.log.info(
+            f"loading {len(scenes)} scenes — bands {cfg['bands']} + {scl_band} "
+            f"at {cfg['resolution_m']}m"
+        )
 
         stack = stackstac.stack(
             scenes,
-            assets=bands,
+            assets=cfg["bands"] + [scl_band],
             epsg=cfg["epsg"],
             resolution=cfg["resolution_m"],
             bounds_latlon=cfg["bbox"],
-        ) # dims: (time, band, y, x)
-
-        self.log.info(
-            f"resolved grid: epsg={cfg['epsg']} res={cfg['resolution_m']}m "
-            f"shape={dict(zip(stack.sizes, stack.shape))}"
-            )
-        
-        both = stack.sel(band=["red", "nir"]).compute().astype("float32")
-        red = both.sel(band="red")   # (time, y, x)
-        nir = both.sel(band="nir")
-
-        # After compute()
-        if red.sizes["y"] == 0 or red.sizes["x"] == 0:
-            raise RuntimeError(
-                f"stackstac produced empty grid: {dict(red.sizes)}. "
-                f"Check epsg/resolution/bbox consistency."
-            )
-        
-        self.log.info(
-            f"grid dims: time={red.sizes['time']}, y={red.sizes['y']}, x={red.sizes['x']}"
+            dtype="float32",
+            fill_value=np.nan,
         )
-        self.log.info(f"loaded red shape={red.shape}, nir shape={nir.shape}")
-        return red, nir
+        # dims: (time, band, y, x)
+
+        red_raw = stack.sel(band="red")
+        nir_raw = stack.sel(band="nir")
+        scl = stack.sel(band=scl_band).compute()
+
+        # Per-scene offset flag
+        offset_applied = xr.DataArray(
+            [bool(s.properties.get("earthsearch:boa_offset_applied")) for s in scenes],
+            dims="time",
+            coords={"time": red_raw.time},
+        )
+        offset = xr.where(offset_applied, 0.0, cfg["l2a_offset"])
+
+        red = red_raw * cfg["l2a_scale"] + offset
+        nir = nir_raw * cfg["l2a_scale"] + offset
+
+        # Cloud mask
+        bad = scl.isin(bad_classes)
+        red = red.where(~bad)
+        nir = nir.where(~bad)
+
+        # Nodata mask
+        nodata = (red_raw == 0) & (nir_raw == 0) & (~bad)
+        red = red.where(~nodata)
+        nir = nir.where(~nodata)
+
+        self.log.info(
+            f"loaded red={red.shape}, nir={nir.shape}, scl={scl.shape}, "
+            f"cloud-masked pixels: {float(bad.mean()):.1%}"
+        )
+        return red, nir, scl
 
     def _compute_ndvi(self, red, nir):
         ndvi = (nir - red) / (nir + red)
