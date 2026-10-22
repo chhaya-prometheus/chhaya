@@ -1,31 +1,46 @@
-environment: dev
-use_stubs: true
-confirm_prod_upload: false
+# Execution Configuration
+environment: dev              # Active deployment environment (e.g., dev, staging, prod)
+use_stubs: true               # Use synthetic data/mock services for testing instead of live API calls
+confirm_prod_upload: false    # Skip manual prompt verification when uploading artifacts to production
 
+# Cloud Storage Settings (AWS)
 aws:
-  region: ap-south-1
-  bucket: chhaya-delhi
+  region: ap-south-1          # AWS Region hosted in Asia Pacific (Mumbai)
+  bucket: chhaya-delhi        # Target S3 bucket name for data syncing
 
+# Local Directory Structures
 local:
-  raw_dir: data/raw              # source downloads (sentinel-2, worldpop, ...)
-  cities_dir: data/cities        # per-city boundaries, wards, hex fixtures
-  derived_dir: data/derived      # pipeline outputs
+  raw_dir: data/raw              # Source downloads (sentinel-2, worldpop, ...)
+  cities_dir: data/cities        # Per-city boundaries, wards, hex fixtures
+  derived_dir: data/derived      # Pipeline outputs
 
+# S3 Storage Organization
 fixtures:
-  s3_prefix: fixtures/
+  s3_prefix: fixtures/        # S3 folder path prefix for static input geometries and configurations
 
 artifacts:
-  s3_prefix: features/
+  s3_prefix: features/        # S3 folder path prefix where generated pipeline output features are saved
 
+# External Geospatial Data Providers
 sources:
   sentinel2:
-    stac_url: https://earth-search.aws.element84.com/v1
-    collection: sentinel-2-l2a
-    date_range: "2026-05-01/2026-06-30"
-    max_cloud_cover: 20
-    bands: [red, nir]
-    resolution_m: 10
+    stac_url: https://earth-search.aws.element84.com/v1  # Base URL endpoint for Element 84 STAC API catalog access
+    collection: sentinel-2-l2a                          # Target Sentinel-2 Level-2A Bottom-Of-Atmosphere reflectance collection
+    date_range: "2026-05-01/2026-06-30"                 # Query window constraining image acquisition times
+    max_cloud_cover: 20                                 # Upper limit threshold percentage to drop heavy cloud scenes
+    bands: [red, nir]                                   # Spectral bands required to calculate indices like NDVI (B04 and B08)
+    resolution_m: 10                                    # Target spatial resolution grid in meters for sampling
+    
+    # Scene Compositing Logic
     composite:
-      enabled: true
-      scenes: 4
-      window_days: 30
+      enabled: true           # True to stitch multiple temporal tracks together to remove localized cloud gaps
+      scenes: 4               # Maximum number of concurrent low-cloud images to fuse per composite
+      window_days: 30         # Maximum temporal span size for aggregating observations around the target time
+      
+    # NEW: Cloud Masking Strategy
+    scl_band: scl                  # Target band containing the Scene Classification Layer pixels
+    scl_bad_classes: [3, 8, 9, 10] # Pixels marked 3 (Cloud Shadows), 8 (Cloud Med), 9 (Cloud High), 10 (Thin Cirrus) will be masked out
+    
+    # NEW: Harmonized L2A Product Scale Factors
+    l2a_scale: 0.0001         # Scaling multiplier applied to DN (Digital Numbers) to convert back to float reflectance values
+    l2a_offset: -0.1          # Offset correction added to reflectances (needed for Sentinel-2 baseline 04.00+ products)
