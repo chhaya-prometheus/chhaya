@@ -35,10 +35,10 @@ class Sentinel2Source(SourceBase):
 
         if cache.exists():
             self.log.info(f"using cached NDVI raster: {cache.name}")
-            ndvi = xr.open_dataarray(cache).load()
+            ndvi = xr.open_dataarray(cache, engine="rasterio").load()
         else:
-            red, nir = self._load_bands(scene)
-            ndvi = self._compute_ndvi(red, nir)
+            red, nir, scl = self._load_bands(scene)
+            ndvi = self._compute_ndvi(red, nir, scl)
             self._save_cache(ndvi, cache)
 
         return self._zonal(ndvi, grid, cache)
@@ -84,9 +84,9 @@ class Sentinel2Source(SourceBase):
             if len(chosen) >= comp["scenes"]:
                 break
 
-            tile = item.properties.get("grid:code", "unknown")
-            if tile in used_tiles:
-                continue
+            tile = item.properties.get("grid:code")
+            if tile is None or tile in used_tiles:
+                continue   
 
             if anchor_date is None:
                 anchor_date = item.datetime
@@ -105,11 +105,12 @@ class Sentinel2Source(SourceBase):
         for i in chosen:
             self.log.info(
                 f"  using {i.id} — tile {i.properties.get('grid:code')} — "
-                f"{i.properties['eo:cloud_cover']:.2f}% cloud — {i.datetime.date()}"
+                f"{i.properties['eo:cloud_cover']:.2f}% cloud — "
+                f"{i.datetime.date()} — "
+                f"offset_applied={i.properties.get('earthsearch:boa_offset_applied')}"
             )
 
         return chosen
-
 
     def _cache_path(self, scenes: list) -> Path:
         cache_dir = Path(self.cfg["local"]["raw_dir"]) / "sentinel2"
@@ -118,40 +119,73 @@ class Sentinel2Source(SourceBase):
         key = hashlib.md5("|".join(sorted(s.id for s in scenes)).encode()).hexdigest()[:10]
         return cache_dir / f"composite_{key}_ndvi.tif"
 
-
     def _load_bands(self, scenes: list):
+        """Load red, nir, scl as lazy arrays. Apply scale+offset. Mask clouds."""
         cfg = self._cfg()
-        self.log.info(f"loading {len(scenes)} scenes, bands {cfg['bands']} at {cfg['resolution_m']}m")
+        scl_band = cfg["scl_band"]
+        bad_classes = cfg["scl_bad_classes"]
+
+        self.log.info(
+            f"loading {len(scenes)} scenes — bands {cfg['bands']} + {scl_band} "
+            f"at {cfg['resolution_m']}m"
+        )
 
         stack = stackstac.stack(
             scenes,
-            assets=cfg["bands"],
+            assets=cfg["bands"] + [scl_band],
             epsg=cfg["epsg"],
             resolution=cfg["resolution_m"],
             bounds_latlon=cfg["bbox"],
-        )  # dims: (time, band, y, x)
+            dtype="float32",
+            fill_value=np.float32(np.nan),
+            rescale=False,
+        )
+        # dims: (time, band, y, x)
 
-        red = stack.sel(band="red").compute().astype("float32")  # (time, y, x)
-        nir = stack.sel(band="nir").compute().astype("float32")
+        red_raw = stack.sel(band="red")
+        nir_raw = stack.sel(band="nir")
+        scl = stack.sel(band=scl_band).compute()
 
-        self.log.info(f"loaded red shape={red.shape}, nir shape={nir.shape}")
-        return red, nir
+        # Per-scene offset flag
+        offset_applied = xr.DataArray(
+            [bool(s.properties.get("earthsearch:boa_offset_applied")) for s in scenes],
+            dims="time",
+            coords={"time": red_raw.time},
+        )
+        offset = xr.where(offset_applied, 0.0, cfg["l2a_offset"])
 
+        red = red_raw * cfg["l2a_scale"] + offset
+        nir = nir_raw * cfg["l2a_scale"] + offset
 
-    def _compute_ndvi(self, red, nir):
-        # red, nir shape: (time, y, x). Compute NDVI per scene, then median across time.
-        ndvi = (nir - red) / (nir + red)
-        valid = (red > 0) & (nir > 0)
-        ndvi = ndvi.where(valid)
+        # Cloud mask
+        bad = scl.isin(bad_classes)
+        red = red.where(~bad)
+        nir = nir.where(~bad)
 
-        # Median across time — robust to a cloudy pixel in one scene
-        ndvi_med = ndvi.median(dim="time", skipna=True)
+        # Nodata mask
+        nodata = (red_raw == 0) & (nir_raw == 0) & (~bad)
+        red = red.where(~nodata)
+        nir = nir.where(~nodata)
 
         self.log.info(
-            f"composite NDVI mean={float(ndvi_med.mean(skipna=True)):.3f}, "
-            f"valid={float(valid.any(dim='time').mean()):.1%}"
+            f"loaded red={red.shape}, nir={nir.shape}, scl={scl.shape}, "
+            f"cloud-masked pixels: {float(bad.mean()):.1%}"
         )
-        return ndvi_med
+        return red, nir, scl
+
+    def _compute_ndvi(self, red, nir, scl):
+        """Median composite across time, then NDVI on the median. Lazy until final compute."""
+        red_med = red.median(dim="time", skipna=True)
+        nir_med = nir.median(dim="time", skipna=True)
+
+        ndvi_lazy = (nir_med - red_med) / (nir_med + red_med)
+        ndvi = ndvi_lazy.compute()
+
+        self.log.info(
+            f"composite NDVI mean={float(ndvi.mean(skipna=True)):.3f}, "
+            f"valid={float(ndvi.notnull().mean()):.1%}"
+        )
+        return ndvi
     
     def _save_cache(self, ndvi, path: Path):
         ndvi = ndvi.rio.set_spatial_dims(x_dim="x", y_dim="y", inplace=False)
