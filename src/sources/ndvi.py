@@ -37,7 +37,7 @@ class Sentinel2Source(SourceBase):
             self.log.info(f"using cached NDVI raster: {cache.name}")
             ndvi = xr.open_dataarray(cache, engine="rasterio").load()
         else:
-            red, nir, scl = self._load_bands(scenes)
+            red, nir, scl = self._load_bands(scene)
             ndvi = self._compute_ndvi(red, nir, scl)
             self._save_cache(ndvi, cache)
 
@@ -105,7 +105,9 @@ class Sentinel2Source(SourceBase):
         for i in chosen:
             self.log.info(
                 f"  using {i.id} — tile {i.properties.get('grid:code')} — "
-                f"{i.properties['eo:cloud_cover']:.2f}% cloud — {i.datetime.date()}"
+                f"{i.properties['eo:cloud_cover']:.2f}% cloud — "
+                f"{i.datetime.date()} — "
+                f"offset_applied={i.properties.get('earthsearch:boa_offset_applied')}"
             )
 
         return chosen
@@ -135,7 +137,8 @@ class Sentinel2Source(SourceBase):
             resolution=cfg["resolution_m"],
             bounds_latlon=cfg["bbox"],
             dtype="float32",
-            fill_value=np.nan,
+            fill_value=np.float32(np.nan),
+            rescale=False,
         )
         # dims: (time, band, y, x)
 
@@ -170,31 +173,19 @@ class Sentinel2Source(SourceBase):
         )
         return red, nir, scl
 
-    def _compute_ndvi(self, red, nir):
-        ndvi = (nir - red) / (nir + red)
+    def _compute_ndvi(self, red, nir, scl):
+        """Median composite across time, then NDVI on the median. Lazy until final compute."""
+        red_med = red.median(dim="time", skipna=True)
+        nir_med = nir.median(dim="time", skipna=True)
 
-        # Reject pixels with:
-        #   - non-finite input
-        #   - near-zero denominator (division blowup)
-        #   - implausible NDVI (safety net)
-        eps = 1e-6
-        denom = nir + red
-        valid = (
-            np.isfinite(red)
-            & np.isfinite(nir)
-            & (np.abs(denom) > eps)
-            & (ndvi >= -1)
-            & (ndvi <= 1)
-        )
-        ndvi = ndvi.where(valid)
-
-        ndvi_med = ndvi.median(dim="time", skipna=True)
+        ndvi_lazy = (nir_med - red_med) / (nir_med + red_med)
+        ndvi = ndvi_lazy.compute()
 
         self.log.info(
-            f"composite NDVI mean={float(ndvi_med.mean(skipna=True)):.3f}, "
-            f"valid={float(valid.any(dim='time').mean()):.1%}"
+            f"composite NDVI mean={float(ndvi.mean(skipna=True)):.3f}, "
+            f"valid={float(ndvi.notnull().mean()):.1%}"
         )
-        return ndvi_med
+        return ndvi
     
     def _save_cache(self, ndvi, path: Path):
         ndvi = ndvi.rio.set_spatial_dims(x_dim="x", y_dim="y", inplace=False)
